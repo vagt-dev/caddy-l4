@@ -3,6 +3,7 @@ name: Build and Push Caddy L4 Image
 on:
   push:
     branches: [main, master]
+  pull_request:
   workflow_dispatch:
 
 env:
@@ -21,7 +22,23 @@ jobs:
 
       - uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3
 
+      # Built for the runner's platform and loaded, so the regression tests run
+      # against the same Dockerfile and cache the published build comes from.
+      - name: Build test image
+        uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6
+        with:
+          context: .
+          platforms: linux/amd64
+          load: true
+          tags: caddy-l4:test
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: Regression tests
+        run: sh test/run.sh caddy-l4:test
+
       - uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9 # v3
+        if: github.event_name != 'pull_request'
         with:
           registry: ${{ env.REGISTRY }}
           username: ${{ github.actor }}
@@ -46,6 +63,7 @@ jobs:
             type=raw,value=latest
 
       - uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6
+        if: github.event_name != 'pull_request'
         with:
           context: .
           platforms: linux/amd64,linux/arm64

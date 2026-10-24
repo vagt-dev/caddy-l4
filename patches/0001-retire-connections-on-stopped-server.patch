@@ -1,0 +1,50 @@
+diff --git a/modules/caddyhttp/app.go b/modules/caddyhttp/app.go
+index 74f1466..26da07d 100644
+--- a/modules/caddyhttp/app.go
++++ b/modules/caddyhttp/app.go
+@@ -740,6 +740,7 @@ func (app *App) Stop() error {
+ 			return
+ 		}
+ 
++		server.stopping.Store(true)
+ 		if err := server.server.Shutdown(ctx); err != nil {
+ 			if cause := context.Cause(ctx); cause != nil && errors.Is(err, context.DeadlineExceeded) {
+ 				err = cause
+diff --git a/modules/caddyhttp/server.go b/modules/caddyhttp/server.go
+index 41a8e55..13159b2 100644
+--- a/modules/caddyhttp/server.go
++++ b/modules/caddyhttp/server.go
+@@ -29,6 +29,7 @@ import (
+ 	"slices"
+ 	"strings"
+ 	"sync"
++	"sync/atomic"
+ 	"time"
+ 
+ 	"github.com/caddyserver/certmagic"
+@@ -294,6 +295,9 @@ type Server struct {
+ 	shutdownAt   time.Time
+ 	shutdownAtMu *sync.RWMutex
+ 
++	// stopping is set once Stop begins shutting this server down. See ServeHTTP.
++	stopping atomic.Bool
++
+ 	// registered callback functions
+ 	connStateFuncs   []func(net.Conn, http.ConnState)
+ 	connContextFuncs []func(ctx context.Context, c net.Conn) context.Context
+@@ -331,6 +335,15 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+ 	h := w.Header()
+ 	h["Server"] = serverHeader
+ 
++	// A connection whose TLS handshake was still in flight when this server
++	// began shutting down is handed to the HTTP/2 server after its GOAWAY
++	// broadcast, so it never receives one and keeps serving this superseded
++	// config for as long as the client holds it open. x/net/http2 turns a
++	// "Connection: close" response header into a GOAWAY for that connection.
++	if r.ProtoMajor == 2 && s.stopping.Load() {
++		h["Connection"] = []string{"close"}
++	}
++
+ 	// advertise HTTP/3, if enabled
+ 	if s.h3server != nil && r.ProtoMajor < 3 {
+ 		if err := s.h3server.SetQUICHeaders(h); err != nil {
